@@ -6,9 +6,9 @@
 //#include "Particle.h"
 
 /*
-I2C address (need to check schematic to see resistor configuration for ADDRSEL pin):
+I2C address (0ohm ressitor to GND, so address is 0x10):
 */
-#define PAC1951_I2C_ADDR 0x10 //assuming pulled to GND (0Ω)
+#define PAC1951_I2C_ADDR 0x10 
 
 /*
 Expected ID values for PAC1951 (used to ensure the device being communicated with is correct)
