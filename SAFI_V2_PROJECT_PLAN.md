@@ -50,7 +50,7 @@
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
 | 1  | Create main .ino skeleton with setup()/loop() and task scheduling             |          |        |
-| 2  | Define board pin map header — resolve all pin conflicts                       |          |        |
+| 2  | Define board pin map header — resolve all pin conflicts                       |Filip     |Review  |
 | 3  | Implement power-on sequencing (rail enable order, peripheral init)            |          |        |
 | 4  | Implement power management (sleep/wake via XC6192 button controller)          |          |        |
 | 5  | Set up GitHub branch strategy (develop branch, PR templates)                  |          |        |
@@ -67,15 +67,15 @@
 ### New Drivers
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 11 | LCD display driver (ER-TFT2.79-1 SPI — init, clear, text, shapes, backlight) | Filip     |Review  |
+| 11 | LCD display driver (ER-TFT2.79-1 SPI — init, clear, text, shapes, backlight)  | Filip     |Review  |
 | 12 | Button input handler (4-button debounce, short/long press detection)          |          |        |
 | 13 | RGB LED driver (color set, blink patterns, status modes)                      |          |        |
 
 ### Pasteurization Control
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 14 | HTST state machine (IDLE > PREHEAT > PASTEURIZE > COOL > COMPLETE > FAULT)   |          |        |
-| 15 | Motor control integration (ramp profiles, direction, overcurrent abort)       |          |        |
+| 14 | HTST state machine (IDLE > PREHEAT > PASTEURIZE > COOL > COMPLETE > FAULT)    |          |        |
+| 15 | Motor control integration (ramp profiles, direction, overcurrent abort)       |            |        |
 | 16 | Temperature monitoring loop (non-blocking DS18B20, moving avg, fault detect)  |          |        |
 | 17 | Safety interlocks (overcurrent shutdown, sensor disconnect, timeout watchdog) |          |        |
 
@@ -145,7 +145,7 @@
 ## Key Design Decisions
 
 - Platform: Particle DeviceOS (not Zephyr)
-- HTST parameters: 72C for 15 seconds (standard)
+- HTST parameters: 74C for 15 seconds (standard)
 - Cloud: Particle Cloud (publish/subscribe/functions)
 - FIFO overflow: overwrite oldest
 - Single Jira epic for all 33 stories
