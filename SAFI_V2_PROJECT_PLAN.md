@@ -67,7 +67,7 @@
 ### New Drivers
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 11 | LCD display driver (ER-TFT2.79-1 SPI — init, clear, text, shapes, backlight) |          |        |
+| 11 | LCD display driver (ER-TFT2.79-1 SPI — init, clear, text, shapes, backlight) | Filip     |Review  |
 | 12 | Button input handler (4-button debounce, short/long press detection)          |          |        |
 | 13 | RGB LED driver (color set, blink patterns, status modes)                      |          |        |
 
