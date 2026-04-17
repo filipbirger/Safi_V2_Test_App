@@ -120,6 +120,144 @@ The device uses an LTE modem (Particle B524) to send data to the cloud.
 
 ---
 
+## Cloud Communication Protocol
+
+### How data is sent
+The device publishes records to Particle Cloud using `Particle.publish()`.
+Each publish is a JSON string, maximum 1024 bytes. The event name is
+`"safi/cycle"`. The cloud receives it and can forward it to a webhook,
+database, or dashboard.
+
+### JSON payload — one record per completed cycle
+```json
+{
+  "device_id":    "e00fce687abc1234",
+  "fw_ver":       "1.0.0",
+  "cycle_id":     1042,
+  "ts_start":     1713312000,
+  "ts_end":       1713312187,
+  "temp_start_c": 18.5,
+  "temp_peak_c":  74.3,
+  "temp_end_c":   38.1,
+  "hold_time_s":  16,
+  "result":       "PASS",
+  "fault_code":   0,
+  "batt_pct_start": 87,
+  "batt_pct_end":   84
+}
+```
+
+### Field definitions
+| Field | Type | Description |
+|---|---|---|
+| `device_id` | string | Unique hardware ID of this Safi unit |
+| `fw_ver` | string | Firmware version running on the device |
+| `cycle_id` | uint32 | Auto-incrementing counter, never resets — uniquely identifies every cycle this device has ever run |
+| `ts_start` | uint32 | Unix timestamp (seconds since 1970-01-01) when cycle started |
+| `ts_end` | uint32 | Unix timestamp when COMPLETE or FAULT was reached |
+| `temp_start_c` | float | Milk temperature when START was pressed (°C, 1 decimal place) |
+| `temp_peak_c` | float | Highest temperature recorded during the PASTEURIZE phase (°C) |
+| `temp_end_c` | float | Temperature when cycle ended (°C) |
+| `hold_time_s` | uint8 | Actual seconds the milk was held at ≥ 74°C (must be ≥ 15 for PASS) |
+| `result` | string | `"PASS"` or `"FAULT"` |
+| `fault_code` | uint8 | `0` = no fault. Bitmask: bit 0 = overcurrent, bit 1 = sensor disconnect, bit 2 = timeout, bit 3 = low battery abort |
+| `batt_pct_start` | uint8 | Battery charge percentage at cycle start (0–100) |
+| `batt_pct_end` | uint8 | Battery charge percentage at cycle end (0–100) |
+
+**Estimated payload size:** ~280 bytes — well within the 1024-byte Particle limit.
+
+### Fault code bitmask
+| Bit | Value | Meaning |
+|---|---|---|
+| 0 | 0x01 | Motor overcurrent (current exceeded 2.05 A) |
+| 1 | 0x02 | Temperature sensor disconnected |
+| 2 | 0x04 | Cycle step timeout (watchdog) |
+| 3 | 0x08 | Cycle aborted due to critically low battery |
+| 4–7 | — | Reserved for future use |
+
+---
+
+## Flash & EEPROM Storage
+
+The B524 (nRF52840) has two persistent storage areas used by this firmware:
+
+| Storage | Size | Used for |
+|---|---|---|
+| Emulated EEPROM | 4 KB | Device config, cycle counter, queue head/tail pointers |
+| Internal flash (user sectors) | ~32 KB allocated | FIFO cycle record queue |
+
+---
+
+### EEPROM Layout (4 KB total)
+
+This is small, always-available storage that survives power cycles.
+It holds device state and the pointers needed to find records in the flash queue.
+
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0x000 | 2 bytes | Magic number | `0x5346` ("SF") — confirms EEPROM has been initialised |
+| 0x002 | 2 bytes | EEPROM version | Schema version; allows future migration |
+| 0x004 | 4 bytes | Cycle counter | Total cycles ever run on this device (never resets) |
+| 0x008 | 4 bytes | Queue head | Flash address of the next record to upload |
+| 0x00C | 4 bytes | Queue tail | Flash address where the next record will be written |
+| 0x010 | 2 bytes | Queue record count | Number of records currently waiting to be uploaded |
+| 0x012 | 1 byte | Last fault code | Fault code from the most recent FAULT cycle |
+| 0x013 | 1 byte | Reserved | — |
+| 0x014 | 4 bytes | Last successful upload timestamp | Unix time of last confirmed cloud upload |
+| 0x018 | 2 bytes | Config: hold time threshold (s) | Default 15 — can be updated OTA |
+| 0x01A | 2 bytes | Config: pasteurization temp (°C × 10) | Default 740 (= 74.0°C) — can be updated OTA |
+| 0x01C | 484 bytes | Reserved for future config | Zero-padded |
+
+---
+
+### Flash Queue — Record Layout (32 bytes per record)
+
+Each cycle record is stored as a fixed-size 32-byte binary struct in a
+circular flash buffer. Binary packing is used (not JSON) to keep the
+record small and writes fast.
+
+| Offset | Size | Field | Encoding |
+|---|---|---|---|
+| 0 | 2 bytes | Magic number | `0x5346` — marks a valid record slot |
+| 2 | 2 bytes | CRC-16 | Checksum of bytes 4–31; detects corruption |
+| 4 | 4 bytes | Cycle ID | uint32, matches `cycle_id` in cloud payload |
+| 8 | 4 bytes | Timestamp start | uint32, Unix seconds |
+| 12 | 4 bytes | Timestamp end | uint32, Unix seconds |
+| 16 | 2 bytes | Temp start | int16, tenths of °C (e.g. `185` = 18.5°C) |
+| 18 | 2 bytes | Temp peak | int16, tenths of °C |
+| 20 | 2 bytes | Temp end | int16, tenths of °C |
+| 22 | 1 byte | Hold time | uint8, seconds actually held at ≥ 74°C |
+| 23 | 1 byte | Result | `0x01` = PASS, `0x00` = FAULT |
+| 24 | 1 byte | Fault code | Bitmask — see fault code table above |
+| 25 | 1 byte | Battery % start | uint8, 0–100 |
+| 26 | 1 byte | Battery % end | uint8, 0–100 |
+| 27 | 5 bytes | Reserved | Zero-padded, available for future fields |
+
+**32 bytes × 1024 slots = 32 KB flash allocation**
+At 20 cycles/day this holds **51 days** of offline records — exceeding the 48-hour
+minimum target by a large margin. The circular buffer overwrites the oldest slot
+once full.
+
+### Queue lifecycle
+```
+New cycle completes
+    → write 32-byte record to tail slot in flash
+    → increment tail pointer + record count in EEPROM
+    → if tail == head (queue full): advance head (overwrite oldest)
+
+LTE connected
+    → read record at head pointer
+    → publish JSON to Particle Cloud
+    → wait for ACK
+    → on ACK: advance head pointer, decrement record count in EEPROM
+    → repeat until record count == 0
+
+Power lost mid-write
+    → on next boot: CRC check fails for partial record → slot is skipped
+```
+
+---
+
 ## What Each Button Does
 
 | Button | Short press | Long press |
