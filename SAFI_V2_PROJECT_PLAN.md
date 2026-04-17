@@ -46,9 +46,9 @@ the buttons, the battery, and the connection to the cloud.
 | Step | What triggers it | What the device does | Time / condition to advance |
 |---|---|---|---|
 | **IDLE** | Power-on or cycle complete | Shows home screen (temp, battery, status) | User presses START |
-| **PREHEATING** | START pressed | Motor runs, heater on, screen shows live temp and progress | Until milk reaches **74°C** |
+| **PREHEATING** | START pressed | Motor runs, screen shows live temp and progress | Until milk reaches **74°C** |
 | **PASTEURIZING** | Milk reaches 74°C | Motor continues, countdown timer starts, screen shows countdown | **15 seconds** at ≥ 74°C continuously |
-| **COOLING** | 15-second hold complete | Heater off, motor continues to circulate, screen shows cooling progress | Until milk drops to a safe temperature |
+| **COOLING** | 15-second hold complete |  Motor continues to circulate, screen shows cooling progress | Until milk drops to a safe temperature |
 | **COMPLETE** | Safe cool temperature reached | Buzzer sounds, green LED, record uploaded to cloud, screen shows summary | User presses OK or 30-second auto-timeout |
 | **IDLE** | User confirms or timeout | Returns to home screen ready for next cycle | — |
 
