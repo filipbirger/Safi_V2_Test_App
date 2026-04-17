@@ -67,16 +67,16 @@
 ### New Drivers
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 11 | LCD display driver (ER-TFT2.79-1 SPI — init, clear, text, shapes, backlight)  | Filip     |Review  |
-| 12 | Button input handler (4-button debounce, short/long press detection)          |          |        |
-| 13 | RGB LED driver (color set, blink patterns, status modes)                      |          |        |
+| 11 | LCD display driver (ER-TFT2.79-1 SPI — init, clear, text, shapes, backlight)  |    F     |Review  |
+| 12 | Button input handler (4-button debounce, short/long press detection)          |    D     |        |
+| 13 | RGB LED driver (color set, blink patterns, status modes)                      |    D     |        |
 
 ### Pasteurization Control
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
 | 14 | HTST state machine (IDLE > PREHEAT > PASTEURIZE > COOL > COMPLETE > FAULT)    |          |        |
-| 15 | Motor control integration (ramp profiles, direction, overcurrent abort)       |            |        |
-| 16 | Temperature monitoring loop (non-blocking DS18B20, moving avg, fault detect)  |          |        |
+| 15 | Motor control integration (ramp profiles, direction, overcurrent abort)       |    C     |        |
+| 16 | Temperature monitoring loop (non-blocking DS18B20, moving avg, fault detect)  |    D     |        |
 | 17 | Safety interlocks (overcurrent shutdown, sensor disconnect, timeout watchdog) |          |        |
 
 ### User Interface
@@ -98,6 +98,19 @@
 | 27 | Pasteurization record schema (timestamp, temps, duration, result, battery %)  |          |        |
 | 28 | Cloud sync service (connection monitor, auto-drain, retry with backoff)       |          |        |
 | 29 | OTA firmware update support (validate Particle built-in OTA)                  |          |        |
+
+### Event Manager & Task Scheduling
+| #  | Story                                                                         | Assignee | Status |
+|----|-------------------------------------------------------------------------------|----------|--------|
+| 34 | Define event type enum and event struct (type + priority + data payload union)|          |        |
+| 35 | Implement priority event queue (3-tier circular buffer, ISR-safe post/pop)    |          |        |
+| 36 | Implement subscribe/dispatch mechanism (callback table, multi-subscriber)     |          |        |
+| 37 | Define synchronous task loop: temp + safety run every iteration, max 10ms budget |       |        |
+| 38 | Wire button driver into event manager (SHORT/LONG press events with button ID)|          |        |
+| 39 | Wire temperature and motor into event manager (TEMP_FAULT, OVERCURRENT)       |          |        |
+| 40 | Wire battery/charger into event manager (BATT_LOW, FAULT, CHARGE_COMPLETE)    |          |        |
+| 41 | Wire state machine transitions through event manager (STATE_CHANGED payload)  |          |        |
+| 42 | Wire cloud publish trigger to event manager (PASTEURIZE_COMPLETE → FIFO enqueue) |       |        |
 
 ### Integration & Testing
 | #  | Story                                                                         | Assignee | Status |
@@ -148,6 +161,46 @@
 - HTST parameters: 74C for 15 seconds (standard)
 - Cloud: Particle Cloud (publish/subscribe/functions)
 - FIFO overflow: overwrite oldest
-- Single Jira epic for all 33 stories
+- Single Jira epic for all 42 stories
 - GitHub: feature branches -> develop -> main
 - No regulatory certification requirements at this stage
+
+---
+
+## Event Manager Design
+
+### Priority Tiers
+| Priority | Events | Rationale |
+|---|---|---|
+| CRITICAL | TEMP_FAULT, MOTOR_OVERCURRENT, SENSOR_DISCONNECT, WATCHDOG_TIMEOUT | Safety interlocks — dispatched first every loop |
+| NORMAL | STATE_CHANGED, PASTEURIZE_TIMER_DONE, BTN_PRESS_SHORT, BTN_PRESS_LONG | Control flow — must be responsive but not safety-critical |
+| LOW | BATT_LOW, CHARGE_COMPLETE, CLOUD_CONNECTED, UI_UPDATE, LED_PATTERN | Informational — acceptable latency up to ~500ms |
+
+### Synchronous vs. Async task split
+Temperature sampling and safety checks run **synchronously** in `loop()` on every
+iteration — they do not go through the event queue. The event queue handles
+notification of results to subscribers (UI, cloud, state machine).
+
+    loop() {
+        Temp_Update();         // non-blocking: check if conversion done, latch
+        Safety_Check();        // evaluate faults NOW — trip immediately if needed
+        StateMachine_Update(); // advance state from current readings
+        Event_Dispatch();      // drain queue by priority: CRITICAL → NORMAL → LOW
+    }
+
+### Loop budget
+Target max loop iteration time: **< 10 ms** (excluding infrequent state-transition
+LCD blits). LCD partial updates (temperature text, battery bar) must remain < 1 ms.
+Full-region image draws only permitted on state transitions.
+
+### Event struct
+    typedef struct {
+        EventType_t  type;
+        EventPriority_t priority;   // CRITICAL / NORMAL / LOW
+        union {
+            uint8_t  buttonId;
+            float    tempC;
+            uint8_t  stateId;
+            uint16_t faultMask;
+        } data;
+    } Event_t;
