@@ -1,206 +1,355 @@
 # Safi V2 Pasteurizer — Firmware Project Plan
 
-**Epic:** Safi V2 Production Firmware
-**Timeline:** 1 month (~2026-05-15), functional prototype
-**Team:** Filip (lead/reviewer) + 3 junior developers
-**Platform:** Particle DeviceOS on B524MEA (nRF52840 + LTE)
-**Repo:** github.com/filipbirger/Safi_V2_Test_App
+**Project:** Safi V2 Production Firmware
+**Target completion:** 2026-05-15 (functional prototype)
+**Team:** Filip Birger (lead / reviewer) + 3 junior developers
+**Code repository:** github.com/filipbirger/Safi_V2_Test_App
 
 ---
 
-## Hardware Summary
+## What Is This Device?
 
-| Subsystem       | IC                  | Interface  | Pin(s)                                          |
-|-----------------|---------------------|------------|-------------------------------------------------|
-| Motor driver    | TB67H450AFNG        | PWM+GPIO   | MOTPWM1=P0.12, MOTPWM2=P0.24, VMOTEN=P0.13     |
-| Motor current   | MCP6006T + 200mR    | ADC        | IM=ADC2, trip at 2.05A                           |
-| Temp sensor     | DS18B20 (external)  | 1-Wire     | 1WIRE=P0.07                                      |
-| LCD display     | ER-TFT2.79-1        | SPI        | CS=P1.08, RS=P1.09, RSTB=P0.11                  |
-| LCD backlight   | BSS138PW MOSFET     | PWM        | LCD_BL=P1.01                                     |
-| Buzzer          | CMI-1295-03TH       | PWM        | BZR=P1.04 (2.7kHz)                              |
-| Buttons (x4)    | Membrane keyboard   | GPIO       | BTN_PWR, BTN_1=P0.31, BTN_2=P0.05, BTN_3        |
-| RGB LED         | On membrane keyboard| PWM        | R=P0.16, G=P0.15, B=P0.14                       |
-| Battery charger | MP2672AGD           | I2C        | 2-cell 8.4V, 1.7A CC                            |
-| Current monitor | PAC1951T-1E/4MX     | I2C(SMBus) | Addr 0x4B, ALERT1=P1.03, ALERT2=ADC1, PWRDN=P0.30 |
-| Power switch    | XC6192AA10ER-G      | GPIO       | PWR_SHDN=P0.02, SWOUT=P0.28 (2.8uA standby)    |
-| Debug UART      | J502 header         | UART       | Tx, Rx                                           |
-| USB             | Magnetic connector  | USB        | USBD+, USBD-                                    |
-
-**Power rails:** 3.3V_STBY (always-on, 2.8uA) | 4V (SoM) | 3.3V (peripherals) | 6V/3.5A (motor)
-**Battery:** 2S Li-ion, 8.4V, charged via magnetic USB
-**Motor:** No-load 0.1A, Rated 0.45A, Stall 2A
+The Safi V2 is a portable milk pasteurizer. It heats milk to a safe temperature,
+holds it there for a set amount of time, then cools it — a process called HTST
+(High-Temperature Short-Time) pasteurization. The firmware is the software running
+on the device that controls every part of this process: the motor, the display,
+the buttons, the battery, and the connection to the cloud.
 
 ---
 
-## Existing Driver Status
+## How the Device Works — Plain Language Overview
 
-| # | Driver              | Branch                            | Quality | Issues                                              |
-|---|---------------------|-----------------------------------|---------|-----------------------------------------------------|
-| - | DS18B20 temp sensor | feature/temp_sensor_driver        | 5/5     | Pin defined as D2, must be P0.07                    |
-| - | PAC1951T batt mon   | feature/battery_charger_driver    | 5/5     | Minor: hardcoded energy constant                    |
-| - | Buzzer PWM          | feature/Buzzer_PWM_Driver         | 4/5     | No error returns, no off-before-init                |
-| - | TB67H450AFNG motor  | feature/motor-controlller-driver  | 4/5     | Wrong include path, missing Power_SetMotorSupply()  |
-| - | MP2672AGD charger   | feature/battery_monitor_driver    | 3.5/5   | GetFaults() missing, signature mismatch, circular R/W |
+### Inputs (things the device receives or detects)
+| Input | How it works |
+|---|---|
+| Power button | Wakes the device from standby (2.8 µA sleep current when off) |
+| Button 1 / 2 / 3 | Navigate menus and start/stop pasteurization |
+| Temperature sensor | Probes the milk temperature every 750 ms via a waterproof external sensor |
+| Battery level | Monitored continuously via a dedicated chip on the I2C bus |
+| USB charging (magnetic connector) | Detected automatically; charger IC manages the 2-cell battery |
+| Motor current | Measured by an op-amp circuit 1000+ times per second to detect a jam or overload |
+
+### Outputs (things the device does or shows)
+| Output | How it works |
+|---|---|
+| LCD screen (142×428 px) | Shows current temperature, battery %, device state, and button options |
+| Backlight | PWM-dimmed; off during sleep to save power |
+| Motor | Variable-speed pump driven by PWM; runs during PREHEAT, PASTEURIZE, and COOL |
+| Buzzer | Beeps at 2.7 kHz to signal cycle start, completion, and faults |
+| RGB LED | Changes colour to indicate device status (idle, active, fault, charging) |
+| Cloud (Particle LTE) | Uploads a pasteurization record after every completed cycle |
 
 ---
 
-## Story List
+## Pasteurization Cycle — Step by Step
+
+### Normal cycle
+| Step | What triggers it | What the device does | Time / condition to advance |
+|---|---|---|---|
+| **IDLE** | Power-on or cycle complete | Shows home screen (temp, battery, status) | User presses START |
+| **PREHEATING** | START pressed | Motor runs, heater on, screen shows live temp and progress | Until milk reaches **74°C** |
+| **PASTEURIZING** | Milk reaches 74°C | Motor continues, countdown timer starts, screen shows countdown | **15 seconds** at ≥ 74°C continuously |
+| **COOLING** | 15-second hold complete | Heater off, motor continues to circulate, screen shows cooling progress | Until milk drops to a safe temperature |
+| **COMPLETE** | Safe cool temperature reached | Buzzer sounds, green LED, record uploaded to cloud, screen shows summary | User presses OK or 30-second auto-timeout |
+| **IDLE** | User confirms or timeout | Returns to home screen ready for next cycle | — |
+
+### Fault / abort at any step
+| Fault condition | What triggers it | What happens immediately |
+|---|---|---|
+| Motor overload / jam | Current exceeds 2.05 A | Motor stops instantly, FAULT state, red LED, buzzer alarm |
+| Temperature sensor disconnected | No valid reading for > 2 seconds | FAULT state, cycle aborted, error shown on screen |
+| Cycle timeout | Step takes longer than expected (e.g. milk not heating) | FAULT state, watchdog triggers |
+| Low battery | Battery monitor reports critically low charge | Warning shown; cycle will not start; buzzer chirp |
+
+---
+
+## Timing Constraints
+
+These are the time limits the firmware must meet to operate correctly and safely.
+
+| Constraint | Value | Why it matters |
+|---|---|---|
+| Main control loop cycle | < 10 ms | Temperature and safety checks run every loop; longer loops mean slower fault response |
+| Temperature sample interval | 750 ms | DS18B20 sensor conversion time; firmware reads a new value every 750 ms |
+| Safety check interval | Every loop (< 10 ms) | Overcurrent and sensor-disconnect checks must be near-instant |
+| Screen partial update (temp / battery) | < 1 ms | Keeps the loop fast; only small regions of the screen are redrawn |
+| Screen full image swap (state change) | ~60 ms | Only allowed during state transitions, not mid-cycle |
+| Button debounce window | ~20 ms | Prevents a single press registering as multiple presses |
+| Cloud upload retry backoff | Exponential (first retry 1 s, doubles each attempt) | Prevents flooding the network if offline |
+| Offline data storage capacity | ~48 hours (~2.5 KB/day at 20 cycles/day) | Records are stored in flash if cloud is unavailable |
+
+---
+
+## Data Recorded Per Cycle
+
+Every completed pasteurization cycle produces one record that is stored locally
+and uploaded to the cloud when connected.
+
+| Field | Description |
+|---|---|
+| Timestamp | Date and time the cycle started |
+| Start temperature | Milk temperature at cycle start |
+| Peak temperature | Highest temperature reached during PASTEURIZE |
+| Hold time achieved | Actual seconds held at ≥ 74°C (must be ≥ 15 s for a valid cycle) |
+| End temperature | Temperature when COMPLETE was triggered |
+| Cycle result | PASS or FAULT |
+| Battery % at start | State of charge when cycle began |
+
+---
+
+## Battery & Power
+
+| Detail | Value |
+|---|---|
+| Battery type | 2-cell lithium-ion (2S), 8.4 V fully charged |
+| Charging | Via magnetic USB connector, managed automatically at up to 1.7 A |
+| Standby current | 2.8 µA (device appears off; power button wakes it) |
+| Charging states | Not charging → Pre-charge → Fast charge → Complete |
+| Fault protection | Overvoltage, overcurrent, thermal shutdown, NTC temperature monitoring |
+
+---
+
+## Cloud Connectivity
+
+The device uses an LTE modem (Particle B524) to send data to the cloud.
+
+- Records are queued locally in flash memory and uploaded when connected.
+- If the upload fails, the device retries with increasing wait times (1 s, 2 s, 4 s…).
+- If the queue fills (> 48 hours of offline cycles), the oldest record is overwritten.
+- Once a record is confirmed received by the cloud, it is removed from local storage.
+- Remote firmware updates are supported over the air (OTA) via Particle Cloud.
+
+---
+
+## What Each Button Does
+
+| Button | Short press | Long press |
+|---|---|---|
+| Power (BTN_PWR) | Wake from sleep | — |
+| Button 1 | Navigate / confirm | Start cycle (from home screen) |
+| Button 2 | Navigate / back | — |
+| Button 3 | Navigate / cancel | Abort cycle |
+
+*Exact button assignments will be finalised during UI development (stories #18–21).*
+
+---
+
+## Status Indicators
+
+### RGB LED colours
+| Colour | Meaning |
+|---|---|
+| White (dim) | Idle / standby |
+| Green | Pasteurization complete successfully |
+| Blue (pulsing) | Preheating or cooling in progress |
+| Yellow | Low battery warning |
+| Red (flashing) | Fault — device stopped, action required |
+| Cyan | Charging |
+
+### Buzzer patterns
+| Pattern | Meaning |
+|---|---|
+| Single short beep | Button press confirmed |
+| Three ascending beeps | Cycle started |
+| Long double beep | Cycle complete |
+| Rapid repeating beeps | Fault alarm |
+
+---
+
+## Work Breakdown — Story List
+
+Stories are grouped by area. Each story is one unit of work for one developer.
 
 ### Foundation
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 1  | Create main .ino skeleton with setup()/loop() and task scheduling             |          |        |
-| 2  | Define board pin map header — resolve all pin conflicts                       |Filip     |Review  |
-| 3  | Implement power-on sequencing (rail enable order, peripheral init)            |          |        |
-| 4  | Implement power management (sleep/wake via XC6192 button controller)          |          |        |
-| 5  | Set up GitHub branch strategy (develop branch, PR templates)                  |          |        |
+| 1  | Create main program skeleton with setup and repeating task loop               |          |        |
+| 2  | Define hardware pin map — resolve all wiring conflicts between components     | Filip    | Review |
+| 3  | Implement power-on sequence (correct order to turn on each subsystem)         |          |        |
+| 4  | Implement sleep/wake (press power button to wake from 2.8 µA standby)        |          |        |
+| 5  | Set up GitHub branch and pull-request workflow for the team                   |          |        |
 
-### Driver Fixes
+### Driver Fixes (existing code that needs correction)
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 6  | Fix motor driver: include path, add Power_SetMotorSupply(), Board_GetTemperatureC() |     |        |
-| 7  | Fix MP2672AGD: implement GetFaults(), fix signature mismatch, remove circular R/W |      |        |
-| 8  | Fix DS18B20 pin assignment to match hardware (P0.07)                          |          |        |
-| 9  | Add error return codes to buzzer driver                                       |          |        |
-| 10 | Merge all fixed drivers into develop with unified folder structure            |          |        |
+| 6  | Fix motor driver: wrong file path, add motor power enable, add temperature read |       |        |
+| 7  | Fix battery charger driver: add fault reading, fix function signatures        |          |        |
+| 8  | Fix temperature sensor driver: wrong pin used (must be P0.07)                 |          |        |
+| 9  | Add error return values to buzzer driver                                      |          |        |
+| 10 | Merge all corrected drivers into shared development branch                    |          |        |
 
-### New Drivers
+### New Drivers (components not yet written)
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 11 | LCD display driver (ER-TFT2.79-1 SPI — init, clear, text, shapes, backlight)  |    F     |Review  |
-| 12 | Button input handler (4-button debounce, short/long press detection)          |    D     |        |
-| 13 | RGB LED driver (color set, blink patterns, status modes)                      |    D     |        |
+| 11 | LCD display driver: initialise screen, draw text, shapes, images, backlight   | Filip    | Review |
+| 12 | Button driver: debounce all 4 buttons, detect short and long press            | Dev B    |        |
+| 13 | RGB LED driver: set colour, run blink patterns, define status modes           | Dev B    |        |
 
 ### Pasteurization Control
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 14 | HTST state machine (IDLE > PREHEAT > PASTEURIZE > COOL > COMPLETE > FAULT)    |          |        |
-| 15 | Motor control integration (ramp profiles, direction, overcurrent abort)       |    C     |        |
-| 16 | Temperature monitoring loop (non-blocking DS18B20, moving avg, fault detect)  |    D     |        |
-| 17 | Safety interlocks (overcurrent shutdown, sensor disconnect, timeout watchdog) |          |        |
+| 14 | HTST state machine: IDLE → PREHEAT → PASTEURIZE → COOL → COMPLETE → FAULT    |          |        |
+| 15 | Motor control: speed ramp profiles, direction, stop on overcurrent            | Dev C    |        |
+| 16 | Temperature monitoring loop: non-blocking reads, moving average, fault detect | Dev B    |        |
+| 17 | Safety interlocks: overcurrent shutdown, sensor disconnect, timeout watchdog  |          |        |
 
 ### User Interface
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 18 | UI framework (screen manager, menu navigation, button event routing)          |          |        |
-| 19 | Home screen (battery %, temperature, device status)                           |          |        |
-| 20 | Pasteurization active screen (progress bar, countdown, live temp)             |          |        |
-| 21 | Settings / info screen (placeholder for display mockups)                      |          |        |
-| 22 | Buzzer + RGB LED feedback patterns (start, complete, fault)                   |          |        |
+| 18 | UI framework: screen manager, menu navigation, button event routing           |          |        |
+| 19 | Home screen: battery %, current temperature, device status                    |          |        |
+| 20 | Active cycle screen: progress bar, countdown timer, live temperature          |          |        |
+| 21 | Settings / info screen                                                        |          |        |
+| 22 | Buzzer and RGB LED feedback patterns for start, complete, and fault           |          |        |
 
-### Message Queue & Cloud
+### Cloud & Data Storage
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 23 | Persistent FIFO message queue in flash (circular buffer, CRC-16, power-safe)  |          |        |
-| 24 | Queue manager: enqueue on events, drain oldest-first when connected           |          |        |
-| 25 | Queue overflow: overwrite oldest record, queue-full alert                     |          |        |
-| 26 | Particle Cloud integration (functions, variables, publish via FIFO)           |          |        |
-| 27 | Pasteurization record schema (timestamp, temps, duration, result, battery %)  |          |        |
-| 28 | Cloud sync service (connection monitor, auto-drain, retry with backoff)       |          |        |
-| 29 | OTA firmware update support (validate Particle built-in OTA)                  |          |        |
+| 23 | Flash storage queue: persistent circular buffer with error-checking, power-safe |        |        |
+| 24 | Queue manager: add records on events, upload oldest first when connected      |          |        |
+| 25 | Queue overflow handling: overwrite oldest record, alert when queue is full    |          |        |
+| 26 | Particle Cloud integration: publish records, expose device variables          |          |        |
+| 27 | Pasteurization record format: all fields listed in "Data Recorded" section above |       |        |
+| 28 | Cloud sync service: monitor connection, auto-upload, retry with backoff       |          |        |
+| 29 | Over-the-air firmware update: validate Particle built-in OTA works correctly  |          |        |
 
 ### Event Manager & Task Scheduling
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 34 | Define event type enum and event struct (type + priority + data payload union)|          |        |
-| 35 | Implement priority event queue (3-tier circular buffer, ISR-safe post/pop)    |          |        |
-| 36 | Implement subscribe/dispatch mechanism (callback table, multi-subscriber)     |          |        |
-| 37 | Define synchronous task loop: temp + safety run every iteration, max 10ms budget |       |        |
-| 38 | Wire button driver into event manager (SHORT/LONG press events with button ID)|          |        |
-| 39 | Wire temperature and motor into event manager (TEMP_FAULT, OVERCURRENT)       |          |        |
-| 40 | Wire battery/charger into event manager (BATT_LOW, FAULT, CHARGE_COMPLETE)    |          |        |
-| 41 | Wire state machine transitions through event manager (STATE_CHANGED payload)  |          |        |
-| 42 | Wire cloud publish trigger to event manager (PASTEURIZE_COMPLETE → FIFO enqueue) |       |        |
+| 34 | Define all event types, priorities, and data payloads                         |          |        |
+| 35 | Implement priority event queue: 3 tiers, safe to post from interrupts         |          |        |
+| 36 | Implement event dispatch: register handlers, fire callbacks in priority order |          |        |
+| 37 | Define synchronous task loop: temperature + safety checks run every iteration |          |        |
+| 38 | Connect button driver to event manager: post SHORT/LONG press events          |          |        |
+| 39 | Connect temperature and motor to event manager: post fault events             |          |        |
+| 40 | Connect battery and charger to event manager: post low battery, fault, complete |        |        |
+| 41 | Connect state machine to event manager: broadcast state changes to all listeners |       |        |
+| 42 | Connect cloud publish to event manager: cycle complete triggers upload        |          |        |
 
 ### Integration & Testing
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
 | 30 | Full integration of all subsystems into main loop                             |          |        |
 | 31 | Hardware-in-loop testing on real PCB                                          |          |        |
-| 32 | Edge case testing (power loss, sensor disconnect, low battery, queue full)    |          |        |
-| 33 | Power consumption profiling and sleep mode optimization                       |          |        |
+| 32 | Edge case testing: power loss mid-cycle, sensor disconnect, low battery, full queue |   |        |
+| 33 | Power consumption profiling and sleep mode optimisation                       |          |        |
 
 ---
 
 ## Week-by-Week Schedule
 
-| Week | Dev A (Drivers/Motor)          | Dev B (UI/Battery)               | Dev C (App/Cloud)                  |
+| Week | Dev A — Drivers & Motor        | Dev B — UI & Battery             | Dev C — App & Cloud                |
 |------|-------------------------------|----------------------------------|-------------------------------------|
-| 1    | #6 Fix motor, #10 Merge      | #7 Fix MP2672, #8 Fix DS18B20   | #1 Main skeleton, #2 Pin map, #5 GH |
-| 2    | #11 LCD display driver        | #12 Buttons, #13 RGB, #9 Buzzer | #3-4 Power mgmt, #14 State machine  |
-| 3    | #18-20 UI screens             | #15 Motor integ, #16 Temp loop  | #17 Safety, #23-25 FIFO queue       |
-| 4    | #22 Feedback patterns, #30    | #31 HW test, #32 Edge cases     | #26-29 Cloud+OTA, #33 Power profile |
+| 1    | #6 Fix motor, #10 Merge       | #7 Fix charger, #8 Fix temp pin  | #1 Main skeleton, #2 Pin map, #5 GH |
+| 2    | #11 LCD driver                | #12 Buttons, #13 RGB, #9 Buzzer  | #3–4 Power management, #14 State machine |
+| 3    | #18–20 UI screens             | #15 Motor integration, #16 Temp loop | #17 Safety, #23–25 Flash queue  |
+| 4    | #22 Feedback patterns, #30    | #31 Hardware test, #32 Edge cases | #26–29 Cloud + OTA, #33 Power profile |
+
+*Event manager stories #34–42 are distributed across weeks 2–3 alongside the above.*
 
 ---
 
-## FIFO Message Queue Design
+## Technical Reference — Hardware Components
 
-- Persistent circular buffer in flash, CRC-16 per message
-- Only pop after Particle.publish() ACK — no data loss during normal operation
-- Overflow policy: overwrite oldest record when full
-- Sized for ~48hrs offline (~2.5KB/day at 20 cycles)
-- Head/tail pointers persisted to survive power cycles
-- Cloud sync drains oldest-first on reconnect with exponential backoff
+| Component | Part number | How it connects | Pins / Address |
+|---|---|---|---|
+| Motor driver | TB67H450AFNG | PWM + GPIO | MOTPWM1=P0.12, MOTPWM2=P0.24, VMOTEN=P0.13 |
+| Motor current sense | MCP6006T op-amp + 200 mΩ shunt | ADC | IM=ADC2, trips at 2.05 A |
+| Temperature sensor | DS18B20 (external probe) | 1-Wire | P0.07 |
+| LCD display | ER-TFT2.79-1 (NV3007 controller) | SPI | CS=P1.08, DC=P1.09, RST=P0.11 |
+| LCD backlight | BSS138PW MOSFET | PWM | P1.01 |
+| Buzzer | CMI-1295-03TH | PWM | P1.04 (2.7 kHz resonant) |
+| Buttons (×4) | Membrane keyboard | GPIO | BTN_PWR, BTN_1=P0.31, BTN_2=P0.05, BTN_3=TBD |
+| RGB LED | Membrane keyboard | PWM | R=P0.16, G=P0.15, B=P0.14 |
+| Battery charger | MP2672AGD | I2C (addr 0x4B) | 2-cell 8.4 V, up to 1.7 A |
+| Battery monitor | PAC1951T-1E/4MX | I2C (addr 0x10) | ALERT1=P1.03, ALERT2=ADC1, PWRDN=P0.30 |
+| Power switch controller | XC6192AA10ER-G | GPIO | PWR_SHDN=P0.02, SWOUT=P0.28 |
+| Debug header | J502 | UART | TX=P0.06, RX=P0.08 |
+| USB charging port | Magnetic connector | USB | — |
+
+**Power rails:** 3.3 V standby (always on, 2.8 µA) · 4 V SoM · 3.3 V peripherals · 6 V / 3.5 A motor
+**Processor module:** Particle B524MEA (Nordic nRF52840 + Quectel LTE modem)
 
 ---
 
-## Pasteurization State Machine
+## Technical Reference — Driver Status
 
-    IDLE --[BTN_START]--> PREHEATING
-    PREHEATING --[temp >= 72C]--> PASTEURIZING (15s timer, motor ON)
-    PASTEURIZING --[timer done]--> COOLING (motor ON, heater OFF)
-    COOLING --[temp < safe]--> COMPLETE (buzzer, log record, enqueue to FIFO)
-    ANY STATE --[fault]--> FAULT (overcurrent, sensor fail, timeout)
-    COMPLETE/FAULT --[BTN or timeout]--> IDLE
+| # | Driver | Code branch | Quality | Known issues |
+|---|---|---|---|---|
+| — | DS18B20 temperature sensor | feature/temp_sensor_driver | 5/5 | Wrong pin (D2 used, must be P0.07) — fix in story #8 |
+| — | PAC1951T battery monitor | feature/battery_charger_driver | 5/5 | Minor: hardcoded energy constant |
+| — | Buzzer PWM | feature/Buzzer_PWM_Driver | 4/5 | No error return codes, no off-before-init guard |
+| — | TB67H450AFNG motor driver | feature/motor-controlller-driver | 4/5 | Wrong include path, missing Power_SetMotorSupply() |
+| — | MP2672AGD charger | feature/battery_monitor_driver | 3.5/5 | GetFaults() not implemented, signature mismatch, circular read/write |
+
+---
+
+## Technical Reference — Event Manager
+
+### What is the event manager?
+It is a messaging system inside the firmware. When something happens (a button is
+pressed, the temperature changes, a fault occurs), that event is posted to a
+priority queue. Other parts of the firmware register to be notified when specific
+events occur and are called automatically when those events are dispatched.
+
+### Why priority levels?
+Not all events are equally urgent. A motor overcurrent must be acted on immediately.
+A cloud upload can wait. The three tiers ensure the most critical things are always
+handled first regardless of how busy the system is.
+
+### Priority tiers
+| Priority | Examples | Acceptable delay |
+|---|---|---|
+| CRITICAL | Temperature fault, motor overcurrent, sensor disconnect, watchdog timeout | < 10 ms (handled before anything else) |
+| NORMAL | State change, pasteurization timer done, button press | < 20 ms |
+| LOW | Low battery warning, charge complete, cloud connected, LED pattern change | Up to 500 ms |
+
+### What runs outside the event queue (safety-critical path)
+Temperature sampling and safety checks run on every single loop iteration —
+they are not queued. This guarantees they can never be delayed by a backlog of
+other events.
+
+    Every ~10 ms:
+      1. Check if a new temperature reading is ready → latch it
+      2. Evaluate all safety conditions right now → stop motor immediately if fault
+      3. Advance the state machine based on current readings
+      4. Drain the event queue (CRITICAL first, then NORMAL, then LOW)
+
+### Event data structure (for developers)
+    typedef struct {
+        EventType_t     type;      // what happened
+        EventPriority_t priority;  // CRITICAL / NORMAL / LOW
+        union {
+            uint8_t  buttonId;     // which button was pressed
+            float    tempC;        // temperature value at time of event
+            uint8_t  stateId;      // which state was entered
+            uint16_t faultMask;    // bitmask of active faults
+        } data;
+    } Event_t;
+
+---
+
+## Technical Reference — Flash Storage Queue
+
+- Circular buffer stored in non-volatile flash memory
+- Each record has a CRC-16 checksum — corrupt records are detected and skipped
+- A record is only deleted after the cloud confirms it was received
+- If the device loses power mid-write, the partial record is detected and discarded
+- Queue capacity: approximately 48 hours of offline operation at 20 cycles/day (~2.5 KB/day)
+- When full: oldest record is overwritten (same policy as a CCTV loop recording)
 
 ---
 
 ## Key Design Decisions
 
-- Platform: Particle DeviceOS (not Zephyr)
-- HTST parameters: 74C for 15 seconds (standard)
-- Cloud: Particle Cloud (publish/subscribe/functions)
-- FIFO overflow: overwrite oldest
-- Single Jira epic for all 42 stories
-- GitHub: feature branches -> develop -> main
-- No regulatory certification requirements at this stage
-
----
-
-## Event Manager Design
-
-### Priority Tiers
-| Priority | Events | Rationale |
+| Decision | Choice | Reason |
 |---|---|---|
-| CRITICAL | TEMP_FAULT, MOTOR_OVERCURRENT, SENSOR_DISCONNECT, WATCHDOG_TIMEOUT | Safety interlocks — dispatched first every loop |
-| NORMAL | STATE_CHANGED, PASTEURIZE_TIMER_DONE, BTN_PRESS_SHORT, BTN_PRESS_LONG | Control flow — must be responsive but not safety-critical |
-| LOW | BATT_LOW, CHARGE_COMPLETE, CLOUD_CONNECTED, UI_UPDATE, LED_PATTERN | Informational — acceptable latency up to ~500ms |
-
-### Synchronous vs. Async task split
-Temperature sampling and safety checks run **synchronously** in `loop()` on every
-iteration — they do not go through the event queue. The event queue handles
-notification of results to subscribers (UI, cloud, state machine).
-
-    loop() {
-        Temp_Update();         // non-blocking: check if conversion done, latch
-        Safety_Check();        // evaluate faults NOW — trip immediately if needed
-        StateMachine_Update(); // advance state from current readings
-        Event_Dispatch();      // drain queue by priority: CRITICAL → NORMAL → LOW
-    }
-
-### Loop budget
-Target max loop iteration time: **< 10 ms** (excluding infrequent state-transition
-LCD blits). LCD partial updates (temperature text, battery bar) must remain < 1 ms.
-Full-region image draws only permitted on state transitions.
-
-### Event struct
-    typedef struct {
-        EventType_t  type;
-        EventPriority_t priority;   // CRITICAL / NORMAL / LOW
-        union {
-            uint8_t  buttonId;
-            float    tempC;
-            uint8_t  stateId;
-            uint16_t faultMask;
-        } data;
-    } Event_t;
+| Firmware platform | Particle DeviceOS | LTE + OTA built in; faster time to prototype |
+| Pasteurization standard | HTST: 74°C for 15 seconds | Industry standard for milk safety |
+| Cloud provider | Particle Cloud | Native to the hardware module |
+| Queue overflow policy | Overwrite oldest | Preserves most recent data; acceptable for this use case |
+| Scheduling model | Cooperative (no RTOS) | Sufficient for the task count; simpler to debug |
+| Safety path | Synchronous (not queued) | Guarantees fault response time regardless of queue load |
+| Story tracking | Single Jira epic, 42 stories | — |
+| Branch strategy | feature → develop → main | Standard; reviewed before merge |
+| Regulatory certification | Not required at this stage | Prototype only |
