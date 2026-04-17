@@ -269,20 +269,6 @@ Stories are grouped by area. Each story is one unit of work for one developer.
 **Power rails:** 3.3 V standby (always on, 2.8 µA) · 4 V SoM · 3.3 V peripherals · 6 V / 3.5 A motor
 **Processor module:** Particle B524MEA (Nordic nRF52840 + Quectel LTE modem)
 
----
-
-## Technical Reference — Driver Status
-
-| # | Driver | Code branch | Quality | Known issues |
-|---|---|---|---|---|
-| — | DS18B20 temperature sensor | feature/temp_sensor_driver | 5/5 | Wrong pin (D2 used, must be P0.07) — fix in story #8 |
-| — | PAC1951T battery monitor | feature/battery_charger_driver | 5/5 | Minor: hardcoded energy constant |
-| — | Buzzer PWM | feature/Buzzer_PWM_Driver | 4/5 | No error return codes, no off-before-init guard |
-| — | TB67H450AFNG motor driver | feature/motor-controlller-driver | 4/5 | Wrong include path, missing Power_SetMotorSupply() |
-| — | MP2672AGD charger | feature/battery_monitor_driver | 3.5/5 | GetFaults() not implemented, signature mismatch, circular read/write |
-
----
-
 ## Technical Reference — Event Manager
 
 ### What is the event manager?
