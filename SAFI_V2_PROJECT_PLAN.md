@@ -180,16 +180,16 @@ Stories are grouped by area. Each story is one unit of work for one developer.
 ### New Drivers (components not yet written)
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
-| 11 | LCD display driver: initialise screen, draw text, shapes, images, backlight   | Filip    | Review |
-| 12 | Button driver: debounce all 4 buttons, detect short and long press            | Dev B    |        |
-| 13 | RGB LED driver: set colour, run blink patterns, define status modes           | Dev B    |        |
+| 11 | LCD display driver: initialise screen, draw text, shapes, images, backlight   |    F     | Review |
+| 12 | Button driver: debounce all 4 buttons, detect short and long press            |    B     |        |
+| 13 | RGB LED driver: set colour, run blink patterns, define status modes           |    B    |        |
 
 ### Pasteurization Control
 | #  | Story                                                                         | Assignee | Status |
 |----|-------------------------------------------------------------------------------|----------|--------|
 | 14 | HTST state machine: IDLE → PREHEAT → PASTEURIZE → COOL → COMPLETE → FAULT    |          |        |
-| 15 | Motor control: speed ramp profiles, direction, stop on overcurrent            | Dev C    |        |
-| 16 | Temperature monitoring loop: non-blocking reads, moving average, fault detect | Dev B    |        |
+| 15 | Motor control: speed ramp profiles, direction, stop on overcurrent            |     C    |        |
+| 16 | Temperature monitoring loop: non-blocking reads, moving average, fault detect |     B    |        |
 | 17 | Safety interlocks: overcurrent shutdown, sensor disconnect, timeout watchdog  |          |        |
 
 ### User Interface
