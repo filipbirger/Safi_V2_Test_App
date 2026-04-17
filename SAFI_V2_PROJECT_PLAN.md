@@ -2,7 +2,6 @@
 
 **Project:** Safi V2 Production Firmware
 **Target completion:** 2026-05-15 (functional prototype)
-**Team:** Filip Birger (lead / reviewer) + 3 junior developers
 **Code repository:** github.com/filipbirger/Safi_V2_Test_App
 
 ---
