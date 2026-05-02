@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-//#include "Particle.h"
+#include "Particle.h"
 
 /*
 I2C address (0ohm ressitor to GND, so address is 0x10):
