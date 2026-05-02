@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-//#include "Particle.h"
+#include "Particle.h"
 
 //I2C address of the MP2672AGD charger IC
 #define MP2672_I2C_ADDR 0x4B
