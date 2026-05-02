@@ -71,6 +71,8 @@ Expected ID values for PAC1951 (used to ensure the device being communicated wit
 #define PAC1951_ADC_FULL_SCALE 65536 //Full scale for 16-bit ADC (2^16)
 #define PAC1951_VSENSE_FSR_UV 100000L //VSENSE full-scale range in µV (±100mV = 200mV total range, but bipolar mode uses half-scale for positive range)
 #define PAC1951_RSENSE_MOHM 33 //Sense resistor value in mΩ for current calculations (verify with schematic)
+#define PAC1951_SAMPLE_RATE_SPS   1024UL
+#define PAC1951_ACC_TICKS_PER_HOUR  (PAC1951_SAMPLE_RATE_SPS * 3600UL)
 
 /*Alert struct (ALERT_STATUS, 0x26)*/
 typedef struct {

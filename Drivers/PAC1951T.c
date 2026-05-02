@@ -143,7 +143,7 @@ float BattMon_GetEnergymWh(void) {
     /* P_FSR in mW = (VBUS_FSR_mV * VSENSE_FSR_uV) / (1000 * Rsense_mΩ) */
     float p_fsr_mw = (float)PAC1951_VBUS_FSR_MV * (float)PAC1951_VSENSE_FSR_UV /
                      (1000.0f * (float)PAC1951_RSENSE_MOHM);
-    return ((float)vacc * p_fsr_mw) / ((float)count * 3686400.0f);
+    return ((float)vacc * p_fsr_mw) / ((float)count * (float)PAC1951_ACC_TICKS_PER_HOUR);
 }
 
 /*
